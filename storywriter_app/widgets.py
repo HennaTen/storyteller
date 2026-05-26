@@ -158,15 +158,15 @@ class Scene(QWidget):
         self.textLayout.addWidget(QLabel("Scene Summary"), 0, 0)
         self.textLayout.addWidget(self.summary, 1, 0)
 
-        self.summary.setToolTip(
+        self.parentChapter.parentStory.register_tooltip(
+            self.summary,
             """This text is sent to the LLM to tell it what this scene is supposed to depict.
-It is also used when generating later scenes in this chapter as part of the summary of how the chapter has progressed to this point."""
+    It is also used when generating later scenes in this chapter as part of the summary of how the chapter has progressed to this point.""",
         )
 
         self.text = TokenizedTextEdit()
         self.text.setPlaceholderText("Text")
-        self.text.setStyleSheet(exportedStylesheet)
-        self.text.setToolTip("""This is the finished output text for this story.""")
+        self.parentChapter.parentStory.register_tooltip(self.text, """This is the finished output text for this story.""")
         self.sceneTextResponseReady.connect(self.updateText)
 
         self.textLayout.addWidget(QLabel("Text"), 0, 1)
@@ -263,8 +263,11 @@ class Chapter(QFrame):
 
         self.title = QLineEdit()
         self.title.setPlaceholderText("Chapter Title")
-        self.title.setStyleSheet(exportedStylesheet)
         title.addRow("Chapter Title:", self.title)
+        self.parentStory.register_tooltip(
+            self.title,
+            "The title of the story. This is also currently used as the filename when saving or exporting the story.",
+        )
 
         self.layout.addLayout(title)
 
@@ -283,11 +286,12 @@ class Chapter(QFrame):
         summary_container_layout.addWidget(generate_previous_button, 1, 0)
         summary_container_layout.addWidget(self.summary, 0, 1, 2, 1)
 
-        summary_container.setToolTip(
+        self.parentStory.register_tooltip(
+            summary_container,
             """The summary of the previous chapter is used when prompting the LLM to provide it with context for how the story reached the current point.
-Adding a summary of the "previous chapter" to the first chapter can be useful to provide background information that may not be relevant later in the story,
-such as a description of how the characters got into the initial situation they first find themselves in.
-You can use the AI to automatically generate a summary of the previous chapter's text, but it's good to review and edit it to ensure it focuses on what you consider important."""
+    Adding a summary of the "previous chapter" to the first chapter can be useful to provide background information that may not be relevant later in the story,
+    such as a description of how the characters got into the initial situation they first find themselves in.
+    You can use the AI to automatically generate a summary of the previous chapter's text, but it's good to review and edit it to ensure it focuses on what you consider important.""",
         )
         self.chapterSummaryTextResponseReady.connect(self.updateSummaryText)
 
@@ -357,6 +361,7 @@ class StoryWriter(QWidget):
         self.settings = QSettings()
         self._tooltip_registry = WeakKeyDictionary()
         self._tooltips_enabled = self.settings.value("ui/tooltipsEnabled", True, type=bool)
+        self._night_mode_enabled = self.settings.value("ui/nightModeEnabled", False, type=bool)
 
         layout = QVBoxLayout()
 
@@ -367,8 +372,10 @@ class StoryWriter(QWidget):
         self.title = QLineEdit()
         self.title.setPlaceholderText("Title")
         layout.addWidget(self.title)
-
-        self.title.setToolTip("The title of the story. This is also currently used as the filename when saving or exporting the story.")
+        self.register_tooltip(
+            self.title,
+            "The title of the story. This is also currently used as the filename when saving or exporting the story.",
+        )
 
         summary = QWidget()
         summary_layout = QFormLayout()
@@ -380,7 +387,7 @@ class StoryWriter(QWidget):
         summary.setMaximumHeight(100)
         layout.addWidget(summary)
 
-        summary.setToolTip("Background information is always added at the top of prompts sent to the LLM.")
+        self.register_tooltip(summary, "Background information is always added at the top of prompts sent to the LLM.")
 
         self.scrollArea = QScrollArea(self)
         self.scrollArea.setWidgetResizable(True)
@@ -438,16 +445,31 @@ class StoryWriter(QWidget):
         self.tooltips_action.toggled.connect(self.setTooltipsEnabled)
         settings_menu.addAction(self.tooltips_action)
 
+        self.night_mode_action = QAction("Night mode", self)
+        self.night_mode_action.setCheckable(True)
+        self.night_mode_action.setChecked(self._night_mode_enabled)
+        self.night_mode_action.toggled.connect(self.setNightModeEnabled)
+        settings_menu.addAction(self.night_mode_action)
+
     def _apply_tooltips(self):
         for widget, text in self._tooltip_registry.items():
             widget.setToolTip(text if self._tooltips_enabled else "")
 
+    def _apply_theme(self):
+        self.setStyleSheet(DARK_THEME_STYLESHEET if self._night_mode_enabled else LIGHT_THEME_STYLESHEET)
+
     def _save_settings(self):
         self.settings.setValue("ui/tooltipsEnabled", self._tooltips_enabled)
+        self.settings.setValue("ui/nightModeEnabled", self._night_mode_enabled)
 
     def setTooltipsEnabled(self, enabled):
         self._tooltips_enabled = enabled
         self._apply_tooltips()
+        self._save_settings()
+
+    def setNightModeEnabled(self, enabled):
+        self._night_mode_enabled = enabled
+        self._apply_theme()
         self._save_settings()
 
     def _reset_story(self):
