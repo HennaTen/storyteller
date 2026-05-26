@@ -1,6 +1,9 @@
-from PyQt5.QtCore import pyqtSignal, pyqtSlot
+from weakref import WeakKeyDictionary
+
+from PyQt5.QtCore import QSettings, pyqtSignal, pyqtSlot
 from PyQt5.QtGui import QFocusEvent
 from PyQt5.QtWidgets import (
+    QAction,
     QFileDialog,
     QFrame,
     QFormLayout,
@@ -8,6 +11,8 @@ from PyQt5.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QMessageBox,
+    QMenuBar,
     QPushButton,
     QScrollArea,
     QSizePolicy,
@@ -16,11 +21,45 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
-from .prompts import build_scene_prompt, build_summary_prompt
+from .prompts import _chapter_index, build_scene_prompt, build_summary_prompt
 from .story_io import export_story_text, load_story_data, sanitize_filename, save_story_data
 from .tasks import CountTask, GenerateTask, worker
 
-exportedStylesheet = "background-color: rgb(252, 245, 229);"
+LIGHT_THEME_STYLESHEET = """
+QWidget {
+    background-color: rgb(255, 250, 240);
+    color: rgb(36, 32, 28);
+}
+QLineEdit, QTextEdit {
+    background-color: rgb(252, 245, 229);
+    color: rgb(36, 32, 28);
+    selection-background-color: rgb(180, 205, 255);
+}
+QMenuBar {
+    background-color: rgb(244, 236, 220);
+}
+QMenu {
+    background-color: rgb(255, 250, 240);
+}
+"""
+
+DARK_THEME_STYLESHEET = """
+QWidget {
+    background-color: rgb(29, 33, 40);
+    color: rgb(232, 235, 240);
+}
+QLineEdit, QTextEdit {
+    background-color: rgb(39, 44, 52);
+    color: rgb(232, 235, 240);
+    selection-background-color: rgb(82, 125, 196);
+}
+QMenuBar {
+    background-color: rgb(34, 39, 46);
+}
+QMenu {
+    background-color: rgb(34, 39, 46);
+}
+"""
 
 
 def _clear_layout(layout):
@@ -32,6 +71,8 @@ def _clear_layout(layout):
         child_layout = item.layout()
         if child_layout is not None:
             _clear_layout(child_layout)
+
+
 class CustomTextEdit(QTextEdit):
     def __init__(self, parent=None):
         super(CustomTextEdit, self).__init__(parent)
@@ -313,12 +354,18 @@ class StoryWriter(QWidget):
         super().__init__()
 
         self.setWindowTitle("Story writer")
+        self.settings = QSettings()
+        self._tooltip_registry = WeakKeyDictionary()
+        self._tooltips_enabled = self.settings.value("ui/tooltipsEnabled", True, type=bool)
 
         layout = QVBoxLayout()
 
+        self.menuBar = QMenuBar(self)
+        self._build_menus()
+        layout.addWidget(self.menuBar)
+
         self.title = QLineEdit()
         self.title.setPlaceholderText("Title")
-        self.title.setStyleSheet(exportedStylesheet)
         layout.addWidget(self.title)
 
         self.title.setToolTip("The title of the story. This is also currently used as the filename when saving or exporting the story.")
@@ -352,23 +399,80 @@ class StoryWriter(QWidget):
         self.new_chapter_button.clicked.connect(self.addChapter)
         self.buttonsLayout.addWidget(self.new_chapter_button)
 
-        self.save_button = QPushButton("Save")
-        self.save_button.clicked.connect(self.saveStory)
-        self.buttonsLayout.addWidget(self.save_button)
-        self.save_button.setToolTip("Because the programmer is lazy this currently just saves the current story as a file called title.json")
-
-        self.load_button = QPushButton("Load")
-        self.load_button.clicked.connect(self.loadStory)
-        self.buttonsLayout.addWidget(self.load_button)
-
-        self.export_button = QPushButton("Export Text")
-        self.export_button.clicked.connect(self.exportStory)
-        self.buttonsLayout.addWidget(self.export_button)
-        self.export_button.setToolTip('Exports the "end product" parts of the story as a text file. Summaries are removed.')
-
         layout.addLayout(self.buttonsLayout)
 
         self.setLayout(layout)
+        self._apply_tooltips()
+        self._apply_theme()
+
+    def register_tooltip(self, widget, text):
+        self._tooltip_registry[widget] = text
+        widget.setToolTip(text if self._tooltips_enabled else "")
+
+    def _build_menus(self):
+        file_menu = self.menuBar.addMenu("File")
+
+        save_action = QAction("Save", self)
+        save_action.triggered.connect(self.saveStory)
+        file_menu.addAction(save_action)
+
+        load_action = QAction("Load", self)
+        load_action.triggered.connect(self.loadStory)
+        file_menu.addAction(load_action)
+
+        export_action = QAction("Export Text", self)
+        export_action.triggered.connect(self.exportStory)
+        file_menu.addAction(export_action)
+
+        file_menu.addSeparator()
+
+        clear_action = QAction("Clear", self)
+        clear_action.triggered.connect(self.clearStory)
+        file_menu.addAction(clear_action)
+
+        settings_menu = self.menuBar.addMenu("Settings")
+
+        self.tooltips_action = QAction("Tooltips", self)
+        self.tooltips_action.setCheckable(True)
+        self.tooltips_action.setChecked(self._tooltips_enabled)
+        self.tooltips_action.toggled.connect(self.setTooltipsEnabled)
+        settings_menu.addAction(self.tooltips_action)
+
+    def _apply_tooltips(self):
+        for widget, text in self._tooltip_registry.items():
+            widget.setToolTip(text if self._tooltips_enabled else "")
+
+    def _save_settings(self):
+        self.settings.setValue("ui/tooltipsEnabled", self._tooltips_enabled)
+
+    def setTooltipsEnabled(self, enabled):
+        self._tooltips_enabled = enabled
+        self._apply_tooltips()
+        self._save_settings()
+
+    def _reset_story(self):
+        self.title.clear()
+        self.summary.setPlainTextAndTokens("", 0)
+        _clear_layout(self.chapterLayout)
+
+    def clearStory(self):
+        confirmation = QMessageBox.question(
+            self,
+            "Clear story",
+            "Clear everything in the current story?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if confirmation != QMessageBox.Yes:
+            return
+        self._reset_story()
+
+    def _load_story_data(self, json_data):
+        self._reset_story()
+        self.summary.setPlainTextAndTokens(json_data.get("summary", ""), int(json_data.get("summaryTokens", -1)))
+        self.title.setText(json_data["title"])
+        for chapter_data in json_data["chapters"]:
+            Chapter(self, chapter_data)
 
     def addChapter(self):
         Chapter(self)
@@ -380,11 +484,7 @@ class StoryWriter(QWidget):
         json_data = load_story_data(file_path)
         if json_data is None:
             return
-        self.summary.setPlainTextAndTokens(json_data.get("summary", ""), int(json_data.get("summaryTokens", -1)))
-        self.title.setText(json_data["title"])
-        _clear_layout(self.chapterLayout)
-        for chapter_data in json_data["chapters"]:
-            Chapter(self, chapter_data)
+        self._load_story_data(json_data)
 
     def saveStory(self):
         filename = sanitize_filename(self.title.text())

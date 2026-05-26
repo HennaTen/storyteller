@@ -13,6 +13,8 @@ def excepthook(exc_type, exc_value, exc_tb):
 
 
 def main():
+    QApplication.setOrganizationName("hten")
+    QApplication.setApplicationName("storywriter")
     app = QApplication([])
     sys.excepthook = excepthook
     form = StoryWriter()
